@@ -1,7 +1,8 @@
-// Fake Typing bare metal sample application
-// On the serial port, fakes
+// lightBouncer application
+// On the serial port, Bounce or Bar light
 
 #include "consoleUtils.h"
+#include "hw_types.h" 
 #include <stdint.h>
 
 // My hardware abstraction modules
@@ -9,72 +10,137 @@
 #include "timer.h"
 #include "wdtimer.h"
 #include "leds.h"
+#include "joystick.h"
 
-// My application's modules
-#include "lightBouncer.h"
+#define EXTERNAL_RST 5
+#define WDT_RST      4
+#define COLD_RST   	 0
 
-
-/******************************************************************************
- **              JOKE DATA
- ******************************************************************************/
-
-#define NUM_JOKES 3
-static int s_curJoke = 0;
-static char* jokes[] = {
-		(char[]){0x53, 0x69, 0x67, 0x6E, 0x20, 0x6F, 0x6E, 0x20, 0x64, 0x6F, 0x6F,
-		         0x72, 0x20, 0x6F, 0x66, 0x20, 0x68, 0x61, 0x63, 0x6B, 0x65, 0x72,
-		         0x2E, 0x2E, 0x2E, 0x20, 0x20, 0x20, 0x27, 0x47, 0x6F, 0x6E, 0x65,
-		         0x20, 0x50, 0x68, 0x69, 0x73, 0x68, 0x69, 0x6E, 0x67, 0x27, 0x0A,
-		         0x0D, 0x00},
-		(char[]){0x49, 0x20, 0x73, 0x74, 0x61, 0x72, 0x74, 0x65, 0x64, 0x20, 0x61,
-		         0x20, 0x62, 0x61, 0x6E, 0x64, 0x20, 0x6E, 0x61, 0x6D, 0x65, 0x64,
-		         0x20, 0x27, 0x31, 0x30, 0x32, 0x33, 0x4D, 0x42, 0x27, 0x2C, 0x20,
-		         0x62, 0x75, 0x74, 0x20, 0x63, 0x6F, 0x75, 0x6C, 0x64, 0x20, 0x6E,
-		         0x65, 0x76, 0x65, 0x72, 0x20, 0x67, 0x65, 0x74, 0x20, 0x61, 0x20,
-		         0x67, 0x69, 0x67, 0x2E, 0x0A, 0x0D, 0x00},
-		(char[]){0x4D, 0x79, 0x20, 0x63, 0x6F, 0x6D, 0x70, 0x75, 0x74, 0x65, 0x72,
-		         0x20, 0x69, 0x73, 0x20, 0x73, 0x6F, 0x20, 0x73, 0x6C, 0x6F, 0x77,
-		         0x20, 0x69, 0x74, 0x20, 0x68, 0x65, 0x72, 0x74, 0x7A, 0x2E, 0x0A,
-		         0x0D, 0x00}
-};
+#define RESET_BASE 0x44E00F00
+#define RESET_OFFSET 0x8
 
 static void serialRxIsrCallback(uint8_t rxByte);
 static void doBackgroundSerialWork(void);
 static void listCommands(void);
+static void printResetScources(void);
+static void printWelcomeMessage(void);
+
+static volatile uint8_t s_rxByte = 0;
+
+/******************************************************************************
+ **              MAIN
+ ******************************************************************************/
+int main(void)
+{
+
+	// Initialization
+	Serial_init(serialRxIsrCallback);
+	Timer_init();
+	Watchdog_init();
+	Leds_init();
+	Joystick_init();
+
+	// Setup callbacks from hardware abstraction modules to application:
+	Serial_setRxIsrCallback(serialRxIsrCallback);
+
+	// Display startup messages to console:
+	printWelcomeMessage();
+	printResetScources();
+	listCommands();
+
+	_Bool lastButtonState = false;
+	// Main loop:
+	while(1) {
+		_Bool isButtonPressed = Joystick_readLeftWithStarteWare();
+
+		// Handle background processing
+		doBackgroundSerialWork();
+		
+
+		if (isButtonPressed){
+			Leds_toggleMode();
+		}
+
+		if (lastButtonState != isButtonPressed) {
+			ConsoleUtilsPrintf("Hint: Toggle only works if you press left 2s then release. \n");
+			lastButtonState = isButtonPressed;
+		}
+
+		// Timer ISR signals intermittent background activity.
+		if(Timer_isIsrFlagSet()) {
+			Timer_clearIsrFlag();
+			if (Timers_getWDhittingState()){
+				Watchdog_hit();
+			}
+		}
+	}
+}
+
+
+
 
 /******************************************************************************
  **              SERIAL PORT HANDLING
  ******************************************************************************/
-static volatile uint8_t s_rxByte = 0;
 static void serialRxIsrCallback(uint8_t rxByte) {
 	s_rxByte = rxByte;
 }
 
 static void doBackgroundSerialWork(void)
-{
+{	
+	Leds_flashing();
 	if (s_rxByte != 0) {
-		// Tell a joke
-		if (s_rxByte == 'j') {
-			ConsoleUtilsPrintf("\nNow queuing a joke...\n");
-			LightBouncer_setMessage(jokes[s_curJoke]);
-			s_curJoke = (s_curJoke + 1) % NUM_JOKES;
-		}
-
-		else if (s_rxByte == '?') {
+		if (s_rxByte == '?') {
 			listCommands();
 		}
-
+		else if(s_rxByte >= 48 && s_rxByte <= 57) {
+			ConsoleUtilsPrintf("\nSetting LED speed to %c\n", s_rxByte);
+			Leds_changeSpeed(s_rxByte - 48);
+		}
 		else if(s_rxByte == 'a' || s_rxByte == 'A') {
-			ConsoleUtilsPrintf("bounce mode enabled\n");
-			//Leds_setMode(MODE_A);
+			ConsoleUtilsPrintf("\nChanging to bounce mode\n");
+			Leds_setMode(BOUNCE);
+		}
+		else if(s_rxByte == 'b' || s_rxByte == 'B') {
+			ConsoleUtilsPrintf("\nChanging to bar mode\n");
+			Leds_setMode(BAR);
 		}
 		else if(s_rxByte == 'x' || s_rxByte == 'X') {
-			ConsoleUtilsPrintf("No longer hitting the watchdog.\n");
+			ConsoleUtilsPrintf("\nNo longer hitting the watchdog.\n");
 			Timer_stopHitingWD();
+		}
+		else {
+			ConsoleUtilsPrintf("\nInvalid command\n");
 		}
 
 		s_rxByte = 0;
 	}
+}
+
+static void printWelcomeMessage(void){
+	ConsoleUtilsPrintf("\nWelcome to Light Bouncer, Hope you enjoy the party! \n");
+	ConsoleUtilsPrintf("    Written by William Xinran Zhang.\n");
+	ConsoleUtilsPrintf("------------------------------------------------\n");
+}
+
+static void printResetScources(void){
+
+	uint32_t resetSourceRegister = HWREG(RESET_BASE + RESET_OFFSET);
+
+	ConsoleUtilsPrintf("Reset source (0x%x) = ", resetSourceRegister);
+
+	if((resetSourceRegister & (1 << EXTERNAL_RST)) != 0) {
+		ConsoleUtilsPrintf("External reset, \n");
+	}
+	else if((resetSourceRegister & (1 << WDT_RST)) != 0) {
+		ConsoleUtilsPrintf("Watchdog reset, \n");
+	}
+	else if((resetSourceRegister & (1 << COLD_RST)) != 0) {
+		ConsoleUtilsPrintf("Cold reset, \n");
+	}
+
+	// clean up 
+	HWREG(RESET_BASE + RESET_OFFSET) |= resetSourceRegister;
 }
 
 static void listCommands(void){
@@ -88,44 +154,7 @@ static void listCommands(void){
 	ConsoleUtilsPrintf(" 'BTN':  Push-button to toggle mode.\n");
 }
 
-static void printWelcomeMessage(void){
-	ConsoleUtilsPrintf("\nWelcome to Light Bouncer, Hope you enjoy the party! \n");
-	ConsoleUtilsPrintf("    Written by William Xinran Zhang.\n");
-	ConsoleUtilsPrintf("------------------------------------------------\n");
-}
 
-/******************************************************************************
- **              MAIN
- ******************************************************************************/
-int main(void)
-{
-	// Initialization
-	Serial_init(serialRxIsrCallback);
-	Timer_init();
-	Watchdog_init();
-	LightBouncer_init();
 
-	// Setup callbacks from hardware abstraction modules to application:
-	Serial_setRxIsrCallback(serialRxIsrCallback);
-	Timer_setTimerIsrCallback(LightBouncer_notifyOnTimeIsr);
 
-	// Display startup messages to console:
-	printWelcomeMessage();
-	listCommands();
 
-	// Main loop:
-	while(1) {
-		// Handle background processing
-		doBackgroundSerialWork();
-		LightBouncer_doBackgroundWork();
-		//driveLedsWithSetAndClear();
-
-		// Timer ISR signals intermittent background activity.
-		if(Timer_isIsrFlagSet()) {
-			Timer_clearIsrFlag();
-			if (Timers_getWDhittingState()){
-				Watchdog_hit();
-			}
-		}
-	}
-}

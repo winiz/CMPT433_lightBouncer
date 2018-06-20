@@ -11,7 +11,8 @@
  **                      WATCHDOG FUNCTIONS
  *******************************************************************************/
 #define WD_CLOCK          (32000L)
-#define WD_TIMEOUT_S      (30)
+//WD resets the board after 5 seconds
+#define WD_TIMEOUT_S      (5)
 #define WD_TIMEOUT_TICKS  (WD_TIMEOUT_S * WD_CLOCK)
 #define WD_RESET_VALUE    ((unsigned int)0xFFFFFFFF - WD_TIMEOUT_TICKS + 1)
 
@@ -36,13 +37,3 @@ void Watchdog_hit(void)
 	WatchdogTimerTriggerSet(SOC_WDT_1_REGS, triggerCounter);
 }
 
-void Watchdog_reset(void)
-{
-	static unsigned int triggerCounter = 0;
-
-	// Hit the WD, giving it a new trigger each time to keep it from
-	// resetting the board.
-	triggerCounter++;
-
-	WatchdogTimerTriggerSet(SOC_WDT_1_REGS, triggerCounter);
-}

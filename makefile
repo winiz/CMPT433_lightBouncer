@@ -3,7 +3,8 @@
 # Locating the root directory
 #
 # (Unable to use ~; spell out full path or use HOME)
-ROOT=${HOME}/AM335X_StarterWare_02_00_01_01
+ROOT=${HOME}/cmpt433/AM335X_StarterWare_02_00_01_01
+#ROOT=${HOME}/AM335X_StarterWare_02_00_01_01
 
 # Path to compiler
 LIB_PATH=${HOME}/cmpt433/linaro-gcc/gcc-arm-none-eabi-4_7-2012q4
